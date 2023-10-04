@@ -27,21 +27,29 @@ Use the syslog capability to log any unexpected errors with LOG_ERR level.
 
 int main( int argc, char **argv )
 {
-  openlog( "assessment 2", LOG_PERROR, LOG_USER );
+  openlog( "assignment 2", LOG_PERROR, LOG_USER );
+
   if( argc != 3 ) {
     syslog( LOG_ERR, "Wrong number of arguments: %d", argc );
+    closelog();
     return 1;
   }
 
   FILE *fd = fopen( argv[1], "w" );
   if( !fd ) {
     syslog( LOG_ERR, "Error creating %s", argv[1] );
+    closelog();
     return 1;
   }
 
   syslog( LOG_DEBUG, "Writing %s to %s", argv[2], argv[1] );
-  fwrite( argv[2], 1, strlen( argv[2] ), fd );
+  size_t wlen = fwrite( argv[2], 1, strlen( argv[2] ), fd );
   fclose( fd );
 
+  if( wlen != strlen( argv[2] ) ) {
+    syslog( LOG_ERR, "Error writing %s: %d bytes", argv[1], wlen );
+  }
+
+  closelog();
   return 0;
 }
