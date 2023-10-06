@@ -66,12 +66,13 @@ bool do_exec(int count, ...)
     fflush(stdout);
     pid_t kidpid;
     int status;
+    char * full_path_cmd;
     switch (kidpid = fork()) {
       case -1:
         perror("fork");
         abort();
       case 0:
-        char * full_path_cmd = strdup( command[0] );
+        full_path_cmd = strdup( command[0] );
         command[0] = "";
         int ret = execv(full_path_cmd, command);
         exit( ret );
