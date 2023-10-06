@@ -17,7 +17,7 @@ bool do_system(const char *cmd)
  *   or false() if it returned a failure
 */
 
-    return true;
+    return 0 == system(cmd);
 }
 
 /**
@@ -45,9 +45,6 @@ bool do_exec(int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
 
 /*
  * TODO:
@@ -61,7 +58,32 @@ bool do_exec(int count, ...)
 
     va_end(args);
 
-    return true;
+    // Path to command must to be absolute
+    if( command[0][0] != '/' ) {
+      return false;
+    }
+
+    fflush(stdout);
+    pid_t kidpid;
+    int status;
+    switch (kidpid = fork()) {
+      case -1:
+        perror("fork");
+        abort();
+      case 0:
+        char * full_path_cmd = strdup( command[0] );
+        command[0] = "";
+        int ret = execv(full_path_cmd, command);
+        exit( ret );
+      default:
+        if (waitpid (kidpid, &status, 0) == -1) {
+          return false;
+        }
+        else if (WIFEXITED (status)) {
+          return WEXITSTATUS (status) == 0;
+        }
+        return false;
+    }
 }
 
 /**
@@ -80,9 +102,6 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
 
 
 /*
@@ -94,6 +113,45 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
 */
 
     va_end(args);
+
+    // Path to command must to be absolute
+    if( command[0][0] != '/' ) {
+      return false;
+    }
+
+    fflush(stdout);
+
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    if (fd < 0) {
+      perror("open");
+      abort();
+    }
+
+    pid_t kidpid;
+    int status;
+    switch (kidpid = fork()) {
+      case -1:
+        perror("fork");
+        abort();
+      case 0:
+        if (dup2(fd, 1) < 0) {
+          perror("dup2");
+          abort();
+        }
+        close(fd);
+        char * full_path_cmd = strdup( command[0] );
+        command[0] = "";
+        int ret = execvp(full_path_cmd, command);
+        exit( ret );
+      default:
+        if (waitpid (kidpid, &status, 0) == -1) {
+          return false;
+        }
+        else if (WIFEXITED (status)) {
+          return WEXITSTATUS (status) == 0;
+        }
+        return false;
+    }
 
     return true;
 }
