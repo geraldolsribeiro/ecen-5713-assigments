@@ -86,7 +86,7 @@ void execute_task(Task *task, int *thread_buffer_size, char **thread_buffer) {
 }
 
 void *start_thread(void *args) {
-  int thread_buffer_size = 1024;
+  int thread_buffer_size = 1024 * 1024;
   char *thread_buffer = calloc(thread_buffer_size, sizeof(char));
   if (thread_buffer == NULL) {
     handle_error("calloc");
