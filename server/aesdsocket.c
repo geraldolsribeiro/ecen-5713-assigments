@@ -118,7 +118,7 @@ void *start_thread(void *args) {
 void *timestamp_thread(void *args) {
   Task *task = (Task *)args;
 
-  while (keep_running) {
+  while (0 && keep_running) {
     for (int i = 0; i < 10 && keep_running == 1; i++) {
       sleep(1);
     }
