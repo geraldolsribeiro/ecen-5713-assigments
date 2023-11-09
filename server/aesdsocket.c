@@ -86,7 +86,7 @@ void execute_task(Task *task, int *thread_buffer_size, char **thread_buffer) {
 }
 
 void *start_thread(void *args) {
-  int thread_buffer_size = 1024;
+  int thread_buffer_size = 10 * 1024 * 1024;
   char *thread_buffer = calloc(thread_buffer_size, sizeof(char));
   if (thread_buffer == NULL) {
     handle_error("calloc");
@@ -118,7 +118,7 @@ void *start_thread(void *args) {
 void *timestamp_thread(void *args) {
   Task *task = (Task *)args;
 
-  while (keep_running) {
+  while (0 && keep_running) {
     for (int i = 0; i < 10 && keep_running == 1; i++) {
       sleep(1);
     }
@@ -142,40 +142,6 @@ int main(int argc, char **argv) {
     if (strncmp(argv[i], "-d", 2) == 0) {
       is_daemon = 1;
       break;
-    }
-  }
-
-  if (is_daemon) {
-    pid_t pid = fork();
-    if (pid < 0) {
-      perror("Fail to fork");
-      exit(EXIT_FAILURE);
-    }
-    if (pid > 0) {
-      // parent process
-      exit(EXIT_SUCCESS);
-    }
-
-    if (setsid() < 0) {
-      exit(EXIT_FAILURE);
-    }
-
-    signal(SIGCHLD, SIG_IGN);
-    signal(SIGHUP, SIG_IGN);
-
-    pid = fork();
-    if (pid < 0) {
-      perror("Fail to fork (second time)");
-      exit(EXIT_FAILURE);
-    }
-    if (pid > 0) {
-      // parent process
-      exit(EXIT_SUCCESS);
-    }
-    umask(0);
-    chdir("/");
-    for (int x = sysconf(_SC_OPEN_MAX); x >= 0; x--) {
-      close(x);
     }
   }
 
@@ -218,6 +184,40 @@ int main(int argc, char **argv) {
   if (bind(server_socket_fd, (struct sockaddr *)&server_address,
            sizeof(server_address)) < 0) {
     handle_error("bind");
+  }
+
+  if (is_daemon) {
+    pid_t pid = fork();
+    if (pid < 0) {
+      perror("Fail to fork");
+      exit(EXIT_FAILURE);
+    }
+    if (pid > 0) {
+      // parent process
+      exit(EXIT_SUCCESS);
+    }
+
+    /* if (setsid() < 0) { */
+    /*   exit(EXIT_FAILURE); */
+    /* } */
+    /*  */
+    /* signal(SIGCHLD, SIG_IGN); */
+    /* signal(SIGHUP, SIG_IGN); */
+    /*  */
+    /* pid = fork(); */
+    /* if (pid < 0) { */
+    /*   perror("Fail to fork (second time)"); */
+    /*   exit(EXIT_FAILURE); */
+    /* } */
+    /* if (pid > 0) { */
+    /*   // parent process */
+    /*   exit(EXIT_SUCCESS); */
+    /* } */
+    /* umask(0); */
+    /* chdir("/"); */
+    /* for (int x = sysconf(_SC_OPEN_MAX); x >= 0; x--) { */
+    /*   close(x); */
+    /* } */
   }
 
   if (listen(server_socket_fd, 3) < 0) {
