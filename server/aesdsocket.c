@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/queue.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -20,18 +21,14 @@
     exit(EXIT_FAILURE);   \
   } while (0)
 
-const int max_number_of_threads = 10;
 int keep_running = 1;
 const char *output_filename = "/var/tmp/aesdsocketdata";
 
-pthread_mutex_t queue_mutex;
+pthread_mutex_t list_mutex;
 pthread_cond_t queue_condition;
 
 void finish() {
   keep_running = 0;
-  for (int t = 0; t < max_number_of_threads; ++t) {
-    pthread_cond_signal(&queue_condition);
-  }
   syslog(LOG_NOTICE, "Caught signal, exiting");
 }
 
@@ -42,26 +39,29 @@ typedef struct Task {
   int id;
 } Task;
 
-Task task_queue[256];
-int task_counter = 0;
+struct thread {
+  pthread_t id;
+  Task task;
+  SLIST_ENTRY(thread) threads;
+};
 
-void submit_task(Task task) {
-  pthread_mutex_lock(&queue_mutex);
-  task_queue[task_counter] = task;
-  task_counter++;
-  pthread_mutex_unlock(&queue_mutex);
-  pthread_cond_signal(&queue_condition);
-}
+SLIST_HEAD(head_s, thread) head;
 
-void execute_task(Task *task, int *thread_buffer_size, char **thread_buffer) {
+void execute_task(Task *task) {
+  int thread_buffer_size = 10 * 1024 * 1024;
+  char *thread_buffer = calloc(thread_buffer_size, sizeof(char));
+  if (thread_buffer == NULL) {
+    handle_error("calloc");
+  }
+
   ssize_t valread =
-      read(task->client_socket_fd, *thread_buffer, *thread_buffer_size - 1);
-  (*thread_buffer)[valread] = 0;
+      read(task->client_socket_fd, thread_buffer, thread_buffer_size - 1);
+  thread_buffer[valread] = 0;
 
   pthread_mutex_lock(task->writing_output_mutex);
 
   fseek(task->output_file, 0, SEEK_END);
-  char *tok = strtok(*thread_buffer, "\n");
+  char *tok = strtok(thread_buffer, "\n");
   while (tok != NULL) {
     fprintf(task->output_file, "%s\n", tok);
     tok = strtok(NULL, "\n");
@@ -69,58 +69,39 @@ void execute_task(Task *task, int *thread_buffer_size, char **thread_buffer) {
 
   long file_size = ftell(task->output_file);
 
-  if (file_size > *thread_buffer_size) {
-    *thread_buffer_size = file_size * 2;
-    *thread_buffer = realloc(*thread_buffer, *thread_buffer_size);
+  if (file_size > thread_buffer_size) {
+    thread_buffer_size = file_size * 2;
+    thread_buffer = realloc(thread_buffer, thread_buffer_size);
   }
 
   rewind(task->output_file);
-  fread(*thread_buffer, file_size, 1, task->output_file);
-  (*thread_buffer)[file_size] = 0;
+  fread(thread_buffer, file_size, 1, task->output_file);
+  thread_buffer[file_size] = 0;
   fseek(task->output_file, 0, SEEK_END);
 
   pthread_mutex_unlock(task->writing_output_mutex);
 
-  send(task->client_socket_fd, *thread_buffer, file_size, 0);
+  send(task->client_socket_fd, thread_buffer, file_size, 0);
   close(task->client_socket_fd);
+
+  free(thread_buffer);
 }
 
 void *start_thread(void *args) {
-  int thread_buffer_size = 10 * 1024 * 1024;
-  char *thread_buffer = calloc(thread_buffer_size, sizeof(char));
-  if (thread_buffer == NULL) {
-    handle_error("calloc");
-  }
-
-  while (keep_running == 1) {
-    Task task;
-    pthread_mutex_lock(&queue_mutex);
-    while (task_counter == 0 && keep_running == 1) {
-      pthread_cond_wait(&queue_condition, &queue_mutex);
-    }
-    if (keep_running == 0) {
-      pthread_mutex_unlock(&queue_mutex);
-      break;
-    }
-
-    task = task_queue[0];
-    for (int q = 0; q < task_counter - 1; ++q) {
-      task_queue[q] = task_queue[q + 1];
-    }
-    task_counter--;
-    pthread_mutex_unlock(&queue_mutex);
-    execute_task(&task, &thread_buffer_size, &thread_buffer);
-  }
-  free(thread_buffer);
+  struct thread *th = (struct thread *)args;
+  execute_task(&th->task);
   return NULL;
 }
 
 void *timestamp_thread(void *args) {
   Task *task = (Task *)args;
 
-  while (0 && keep_running) {
+  while (keep_running) {
     for (int i = 0; i < 10 && keep_running == 1; i++) {
       sleep(1);
+    }
+    if (!keep_running) {
+      break;
     }
     char s[100];
     time_t t = time(NULL);
@@ -200,10 +181,10 @@ int main(int argc, char **argv) {
     if (setsid() < 0) {
       exit(EXIT_FAILURE);
     }
-    
+
     signal(SIGCHLD, SIG_IGN);
     signal(SIGHUP, SIG_IGN);
-    
+
     pid = fork();
     if (pid < 0) {
       perror("Fail to fork (second time)");
@@ -228,27 +209,20 @@ int main(int argc, char **argv) {
   syslog(LOG_NOTICE, "Program started by User %d", getuid());
 
   pthread_t timestamp_thread_id;
-  pthread_t thread_pool[max_number_of_threads];
-  int is_pool_free_on_position[max_number_of_threads];
-  memset(&is_pool_free_on_position, 1, sizeof(is_pool_free_on_position));
   pthread_mutex_t writing_output_mutex;
   int counter = 0;
 
   pthread_mutex_init(&writing_output_mutex, NULL);
-  pthread_mutex_init(&queue_mutex, NULL);
+  pthread_mutex_init(&list_mutex, NULL);
   pthread_cond_init(&queue_condition, NULL);
+
+  SLIST_INIT(&head);
 
   Task timestamp_task = {.writing_output_mutex = &writing_output_mutex,
                          .output_file = output_file};
-
   pthread_create(&timestamp_thread_id, NULL, timestamp_thread, &timestamp_task);
 
-  for (int t = 0; t < max_number_of_threads; ++t) {
-    if (pthread_create(&thread_pool[t], NULL, start_thread, NULL) != 0) {
-      handle_error("pthread_create");
-    }
-  }
-
+  struct thread *e = NULL;
   while (keep_running) {
     int client_socket_fd;
     struct sockaddr_storage their_addr;  // connector's address information
@@ -266,30 +240,41 @@ int main(int argc, char **argv) {
     }
 
     counter++;
-    // printf("%d Accepted fd: %d\n", counter, client_socket_fd);
 
     syslog(LOG_INFO, "Accepted connection from %s",
            inet_ntoa(((struct sockaddr_in *)&their_addr)->sin_addr));
+
+    pthread_mutex_lock(&list_mutex);
+
+    e = malloc(sizeof(struct thread));
+    if (e == NULL) {
+      handle_error("malloc");
+    }
 
     Task task = {.writing_output_mutex = &writing_output_mutex,
                  .client_socket_fd = client_socket_fd,
                  .output_file = output_file,
                  .id = counter};
+    e->task = task;
 
-    submit_task(task);
+    if (pthread_create(&e->id, NULL, start_thread, e) != 0) {
+      handle_error("pthread_create");
+    }
+    SLIST_INSERT_HEAD(&head, e, threads);
+    e = NULL;
+    pthread_mutex_unlock(&list_mutex);
   }
 
-  for (int t = 0; t < max_number_of_threads; ++t) {
-    if (pthread_join(thread_pool[t], NULL) != 0) {
-      handle_error("pthread_create");
+  SLIST_FOREACH(e, &head, threads) {
+    if (pthread_join(e->id, NULL) != 0) {
+      handle_error("pthread_join");
     }
   }
 
   pthread_join(timestamp_thread_id, NULL);
 
-  pthread_mutex_destroy(&queue_mutex);
+  pthread_mutex_destroy(&list_mutex);
   pthread_mutex_destroy(&writing_output_mutex);
-  pthread_cond_destroy(&queue_condition);
 
   fclose(output_file);
   close(server_socket_fd);
