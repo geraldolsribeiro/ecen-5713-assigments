@@ -265,11 +265,14 @@ int main(int argc, char **argv) {
     pthread_mutex_unlock(&list_mutex);
   }
 
+  pthread_mutex_lock(&list_mutex);
   SLIST_FOREACH(e, &head, threads) {
     if (pthread_join(e->id, NULL) != 0) {
       handle_error("pthread_join");
     }
+    SLIST_REMOVE(&head, e, thread, threads);
   }
+  pthread_mutex_unlock(&list_mutex);
 
   pthread_join(timestamp_thread_id, NULL);
 
